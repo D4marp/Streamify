@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Streamify</string>
+    <string name="accessibility_service_description">Allows Streamify to simulate touch gestures for remote control functionality</string>
+</resources>
