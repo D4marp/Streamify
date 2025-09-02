@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">Streamify</string>
-    <string name="accessibility_service_description">Allows Streamify to simulate touch gestures for remote control functionality</string>
+    <string name="accessibility_service_description">
+        Streamify Touch Service: Enables remote control functionality for screen sharing. 
+        This service allows touch gestures from a remote device to be executed on this device 
+        when using Streamify VNC server. The service only activates during VNC sessions and 
+        respects user privacy. No data is collected or transmitted beyond the local network.
+    </string>
 </resources>

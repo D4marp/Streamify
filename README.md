@@ -5,12 +5,14 @@ Streamify adalah aplikasi Android yang memungkinkan screen sharing atau streamin
 
 ## Fitur
 - **Server Mode**: HP A dapat membagikan layarnya ke perangkat lain
-- **Client Mode**: HP B dapat melihat dan menerima stream layar dari HP A
+- **Client Mode**: HP B dapat melihat dan mengontrol layar dari HP A
 - Protokol VNC dengan encoding RAW
 - Resolusi fixed 320x700 untuk konsistensi streaming
 - Auto-scaling dan letterboxing untuk aspect ratio yang berbeda
 - Background service untuk server VNC
 - Real-time frame updates (~10 FPS)
+- **Remote Control**: Tap dan drag dari HP B akan menggerakkan HP A
+- Accessibility Service untuk simulasi touch yang akurat
 
 ## Cara Penggunaan
 
@@ -44,7 +46,27 @@ Streamify adalah aplikasi Android yang memungkinkan screen sharing atau streamin
    - Server IP: IP address HP A (misal: 192.168.1.100)
    - Port: 5901 (default)
 5. **Tap "Connect"** untuk mulai menerima stream
-6. **Layar HP A** akan muncul di HP B dalam waktu beberapa detik
+6. **Layar HP A** akan muncil di HP B dalam waktu beberapa detik
+
+### Remote Control Setup (Menggerakkan layar HP A dari HP B)
+
+#### Di HP A (Server):
+1. **Buka Settings > Accessibility**
+2. **Cari "Streamify Touch Service"** dan aktifkan
+3. **Tap "Allow"** untuk memberikan permission
+4. **Restart aplikasi Streamify** jika perlu
+
+#### Di HP B (Client):
+1. **Connect ke HP A** seperti instruksi di atas
+2. **Setelah connected**, screen HP A akan muncul di HP B
+3. **Tap layar** di HP B untuk melakukan tap di HP A
+4. **Drag layar** di HP B untuk melakukan swipe di HP A
+5. **Semua gestur akan diterjemahkan** ke HP A secara real-time
+
+### Verifikasi Remote Control:
+- Pastikan ada notifikasi "✅ Remote control ready" di HP A
+- Jika muncul "❌ Enable Accessibility Service", ulangi setup accessibility
+- Test dengan tap sederhana dulu sebelum gestur kompleks
 
 ### Menghentikan Sharing
 
@@ -107,6 +129,13 @@ adb shell am broadcast -a com.app.streamify.STOP_VNC_ADB
 - Pastikan firewall tidak memblokir koneksi
 - Check apakah VNC server running di HP A
 
+### Remote Control tidak bekerja
+- **Pastikan Accessibility Service aktif** di HP A (Settings > Accessibility > Streamify Touch Service)
+- Check status di aplikasi: harus ada "✅ Remote control ready"
+- Restart aplikasi setelah mengaktifkan accessibility service
+- Test dengan tap sederhana dulu, baru gestur kompleks
+- Pastikan koordinat tap sesuai (tidak meleset)
+
 ### Stream lag atau terputus
 - Check kualitas koneksi WiFi
 - Pastikan tidak ada aplikasi lain yang menggunakan bandwidth besar
@@ -116,17 +145,19 @@ adb shell am broadcast -a com.app.streamify.STOP_VNC_ADB
 - Android 7.0+ (API level 24+)
 - WiFi connection untuk kedua perangkat
 - Screen recording permission untuk server
+- **Accessibility Service permission untuk remote control**
 - ADB access untuk server control
 
 ## Limitations
 - Saat ini hanya mendukung RAW encoding (uncompressed)
 - Resolusi fixed untuk konsistensi
 - Tidak ada audio streaming
-- Tidak ada remote control (hanya viewing)
+- Remote control memerlukan Accessibility Service
 
 ## Future Enhancements
 - Compressed encoding (JPEG, PNG)
-- Dynamic resolution adjustment
+- Dynamic resolution adjustment  
 - Audio streaming support
-- Remote input control
+- Enhanced remote input control (keyboard, volume, etc.)
 - Direct WiFi connection tanpa ADB
+- Multi-finger gesture support

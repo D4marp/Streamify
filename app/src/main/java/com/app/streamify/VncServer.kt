@@ -55,6 +55,7 @@ class VncServer(
     override fun run() {
         try {
             Log.d(TAG, "VNC server starting on port $port")
+            Log.d(TAG, "Security: Only accepting connections from local network")
 
             serverSocket = ServerSocket(port)
             isRunning.set(true)
@@ -64,8 +65,15 @@ class VncServer(
                 try {
                     clientSocket = serverSocket?.accept()
                     clientSocket?.let { socket ->
-                        Log.d(TAG, "Client connected: ${socket.inetAddress}")
-                        handleClient(socket)
+                        // Security check: Only allow local network connections
+                        val clientAddress = socket.inetAddress.hostAddress
+                        if (isLocalNetworkAddress(clientAddress)) {
+                            Log.d(TAG, "Client connected from local network: $clientAddress")
+                            handleClient(socket)
+                        } else {
+                            Log.w(TAG, "Rejected connection from non-local address: $clientAddress")
+                            socket.close()
+                        }
                     }
                 } catch (e: Exception) {
                     if (isRunning.get()) {
@@ -78,6 +86,31 @@ class VncServer(
         } finally {
             cleanup()
         }
+    }
+    
+    private fun isLocalNetworkAddress(address: String?): Boolean {
+        if (address == null) return false
+        
+        return address.startsWith("192.168.") ||
+               address.startsWith("10.") ||
+               address.startsWith("172.16.") ||
+               address.startsWith("172.17.") ||
+               address.startsWith("172.18.") ||
+               address.startsWith("172.19.") ||
+               address.startsWith("172.20.") ||
+               address.startsWith("172.21.") ||
+               address.startsWith("172.22.") ||
+               address.startsWith("172.23.") ||
+               address.startsWith("172.24.") ||
+               address.startsWith("172.25.") ||
+               address.startsWith("172.26.") ||
+               address.startsWith("172.27.") ||
+               address.startsWith("172.28.") ||
+               address.startsWith("172.29.") ||
+               address.startsWith("172.30.") ||
+               address.startsWith("172.31.") ||
+               address == "127.0.0.1" ||
+               address == "localhost"
     }
 
     private fun handleClient(socket: Socket) {
@@ -570,12 +603,14 @@ class VncServer(
             val y = inputStream?.readShort()?.toInt() ?: 0
             
             Log.d(TAG, "Received pointer event: ($x, $y) button=$buttonMask")
+            Log.d(TAG, "Screen dimensions: ${screenWidth}x${screenHeight}")
+            Log.d(TAG, "Last screen dimensions: ${lastScreenWidth}x${lastScreenHeight}")
             
-            // Simulate touch using adb shell input
+            // Simulate touch using accessibility service
             simulateTouch(x, y, buttonMask)
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling pointer event: ${e.message}")
+            Log.e(TAG, "Error handling pointer event: ${e.message}", e)
         }
         Log.d(TAG, "=== EXITING handlePointerEvent ===")
     }
@@ -583,21 +618,49 @@ class VncServer(
     private fun simulateTouch(x: Int, y: Int, buttonMask: Int) {
         try {
             // Scale coordinates from VNC client to actual screen
-            val scaledX = (x.toFloat() / lastScreenWidth.toFloat() * screenWidth.toFloat())
-            val scaledY = (y.toFloat() / lastScreenHeight.toFloat() * screenHeight.toFloat())
+            val scaledX = if (lastScreenWidth > 0) {
+                (x.toFloat() / lastScreenWidth.toFloat() * screenWidth.toFloat())
+            } else {
+                x.toFloat()
+            }
+            val scaledY = if (lastScreenHeight > 0) {
+                (y.toFloat() / lastScreenHeight.toFloat() * screenHeight.toFloat())
+            } else {
+                y.toFloat()
+            }
             
             Log.d(TAG, "Simulating touch: original($x, $y) -> scaled($scaledX, $scaledY)")
+            Log.d(TAG, "ButtonMask: $buttonMask, Screen: ${screenWidth}x${screenHeight}, LastScreen: ${lastScreenWidth}x${lastScreenHeight}")
             
             if (buttonMask == 1) {
                 // Button pressed - perform touch
-                TouchInputManager.getInstance().simulateTouch(scaledX, scaledY)
-                Log.d(TAG, "Touch executed via TouchInputManager at ($scaledX, $scaledY)")
+                val touchManager = TouchInputManager.getInstance()
+                if (touchManager.isAccessibilityServiceEnabled()) {
+                    Log.d(TAG, "Using accessibility service for touch at ($scaledX, $scaledY)")
+                    touchManager.simulateTouch(scaledX, scaledY)
+                } else {
+                    Log.w(TAG, "Accessibility service not available, using fallback shell command")
+                    // Fallback to shell command if accessibility service is not available
+                    val command = "input tap ${scaledX.toInt()} ${scaledY.toInt()}"
+                    try {
+                        val process = Runtime.getRuntime().exec(command)
+                        val exitCode = process.waitFor()
+                        if (exitCode == 0) {
+                            Log.d(TAG, "Shell command executed successfully: $command")
+                        } else {
+                            Log.w(TAG, "Shell command failed with exit code: $exitCode")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Shell command fallback failed: ${e.message}")
+                    }
+                }
+                Log.d(TAG, "Touch executed at ($scaledX, $scaledY)")
             }
             // For buttonMask == 0 (button released), we don't need to do anything
             // since our touch simulation is instantaneous
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error simulating touch: ${e.message}")
+            Log.e(TAG, "Error simulating touch: ${e.message}", e)
         }
     }
 

@@ -34,11 +34,14 @@ class TouchInputManager private constructor() {
     }
     
     fun simulateTouch(x: Float, y: Float, duration: Long = 50L) {
+        Log.d(TAG, "=== simulateTouch called: ($x, $y) ===")
         executor.submit {
             try {
+                Log.d(TAG, "Executing touch simulation at ($x, $y)")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     val service = accessibilityService
                     if (service != null) {
+                        Log.d(TAG, "Using accessibility service for touch gesture")
                         val path = Path().apply {
                             moveTo(x, y)
                         }
@@ -60,6 +63,9 @@ class TouchInputManager private constructor() {
                         
                         if (!result) {
                             Log.e(TAG, "Failed to dispatch touch gesture at ($x, $y)")
+                            fallbackToShellCommand(x.toInt(), y.toInt())
+                        } else {
+                            Log.d(TAG, "Touch gesture dispatched successfully at ($x, $y)")
                         }
                     } else {
                         Log.w(TAG, "Accessibility service not available for touch at ($x, $y)")
@@ -71,7 +77,7 @@ class TouchInputManager private constructor() {
                     fallbackToShellCommand(x.toInt(), y.toInt())
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error simulating touch: ${e.message}")
+                Log.e(TAG, "Error simulating touch: ${e.message}", e)
                 fallbackToShellCommand(x.toInt(), y.toInt())
             }
         }
@@ -79,17 +85,37 @@ class TouchInputManager private constructor() {
     
     private fun fallbackToShellCommand(x: Int, y: Int) {
         try {
-            val command = "input tap $x $y"
-            Log.d(TAG, "Executing fallback command: $command")
+            // Try different shell commands based on Android version
+            val commands = listOf(
+                "input tap $x $y",
+                "am broadcast -a android.intent.action.INPUT_TAP --ei x $x --ei y $y",
+                "sendevent /dev/input/event0 3 0 $x && sendevent /dev/input/event0 3 1 $y && sendevent /dev/input/event0 1 330 1 && sendevent /dev/input/event0 0 0 0 && sendevent /dev/input/event0 1 330 0 && sendevent /dev/input/event0 0 0 0"
+            )
             
-            val process = Runtime.getRuntime().exec(command)
-            val exitCode = process.waitFor()
-            
-            if (exitCode == 0) {
-                Log.d(TAG, "Shell command executed successfully: $command")
-            } else {
-                Log.w(TAG, "Shell command failed with exit code: $exitCode")
+            var success = false
+            for (command in commands) {
+                try {
+                    Log.d(TAG, "Trying fallback command: $command")
+                    val process = Runtime.getRuntime().exec(command)
+                    val exitCode = process.waitFor()
+                    
+                    if (exitCode == 0) {
+                        Log.d(TAG, "Shell command executed successfully: $command")
+                        success = true
+                        break
+                    } else {
+                        Log.w(TAG, "Shell command failed with exit code: $exitCode for: $command")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Command failed: $command, error: ${e.message}")
+                    continue
+                }
             }
+            
+            if (!success) {
+                Log.e(TAG, "All fallback shell commands failed. Please ensure Accessibility Service is enabled.")
+            }
+            
         } catch (e: Exception) {
             Log.e(TAG, "Fallback shell command failed: ${e.message}")
         }

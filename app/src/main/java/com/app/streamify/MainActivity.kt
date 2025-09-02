@@ -39,6 +39,8 @@ import com.app.streamify.ui.theme.StreamifyTheme
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.ui.res.colorResource
 import androidx.compose.foundation.isSystemInDarkTheme
+import java.net.NetworkInterface
+import java.net.InetAddress
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -173,7 +175,14 @@ class MainActivity : ComponentActivity() {
                     onRequestPermission = {
                         requestScreenCapturePermission()
                     },
-                    onStartServer = { startVncServer() },
+                    onStartServer = { 
+                        if (isAccessibilityServiceEnabled()) {
+                            startVncServer() 
+                        } else {
+                            Toast.makeText(this@MainActivity, "Please enable Accessibility Service for remote control to work", Toast.LENGTH_LONG).show()
+                            requestAccessibilityServicePermission()
+                        }
+                    },
                     onStopServer = { stopVncServer() }
                 )
             }
@@ -431,7 +440,6 @@ class MainActivity : ComponentActivity() {
         val permissions = arrayOf(
             Manifest.permission.INTERNET,
             Manifest.permission.ACCESS_NETWORK_STATE,
-            Manifest.permission.ACCESS_WIFI_STATE,
             Manifest.permission.POST_NOTIFICATIONS
         )
 
@@ -444,7 +452,6 @@ class MainActivity : ComponentActivity() {
         val permissions = arrayOf(
             Manifest.permission.INTERNET,
             Manifest.permission.ACCESS_NETWORK_STATE,
-            Manifest.permission.ACCESS_WIFI_STATE,
             Manifest.permission.POST_NOTIFICATIONS
         )
 
@@ -510,10 +517,12 @@ fun StreamifyApp(
     var ipAddress by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        val wifiManager = context.getSystemService(WifiManager::class.java)
-        val connectionInfo = wifiManager.connectionInfo
-        if (connectionInfo != null) {
-            ipAddress = Formatter.formatIpAddress(connectionInfo.ipAddress)
+        // Get IP address using NetworkInterface (no permission needed)
+        try {
+            ipAddress = getLocalIpAddress() ?: "Not connected"
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to get IP address: ${e.message}")
+            ipAddress = "Unable to get IP"
         }
     }
 
@@ -857,4 +866,40 @@ fun StreamifyApp(
             }
         }
     }
+}
+
+/**
+ * Get local IP address without requiring special permissions
+ */
+fun getLocalIpAddress(): String? {
+    try {
+        val interfaces = NetworkInterface.getNetworkInterfaces()
+        while (interfaces.hasMoreElements()) {
+            val networkInterface = interfaces.nextElement()
+            
+            // Skip loopback and inactive interfaces
+            if (networkInterface.isLoopback || !networkInterface.isUp) {
+                continue
+            }
+            
+            val addresses = networkInterface.inetAddresses
+            while (addresses.hasMoreElements()) {
+                val address = addresses.nextElement()
+                
+                // We want IPv4 address that's not loopback
+                if (!address.isLoopbackAddress && address is InetAddress && address.hostAddress?.indexOf(':') == -1) {
+                    val ip = address.hostAddress
+                    // Filter out non-local addresses (we want local network IPs like 192.168.x.x, 10.x.x.x, etc.)
+                    if (ip != null && (ip.startsWith("192.168.") || 
+                        ip.startsWith("10.") || 
+                        ip.startsWith("172."))) {
+                        return ip
+                    }
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("MainActivity", "Failed to get local IP address", e)
+    }
+    return null
 }

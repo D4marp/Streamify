@@ -1,4 +1,4 @@
-# Quick Start Guide - Screen Sharing HP A ke HP B
+# Quick Start Guide - Screen Sharing + Remote Control HP A ke HP B
 
 ## Step-by-Step Setup (5 menit)
 
@@ -9,17 +9,24 @@
    - Settings → About Phone → Tap "Build Number" 7x
    - Settings → Developer Options → Enable "USB Debugging"
 
-3. **Connect HP A ke PC** dengan kabel USB
-4. **Install ADB** di PC (jika belum ada):
+3. **PENTING - Enable Remote Control**:
+   - Settings → **Accessibility** 
+   - Find **"Streamify Touch Service"**
+   - **Turn ON** the service
+   - Tap **"Allow"** untuk grant permission
+   - ✅ Pastikan ada checkmark hijau
+
+4. **Connect HP A ke PC** dengan kabel USB
+5. **Install ADB** di PC (jika belum ada):
    - Download Platform Tools dari developer.android.com
    - Extract dan tambahkan ke PATH
 
-5. **Configure Port (Optional)**:
+6. **Configure Port (Optional)**:
    - Buka app → Tap "Server Config" 
    - Pilih port custom (5901, 5902, 5903, dll)
    - Atau gunakan port default 5901
 
-6. **Start VNC Server**:
+7. **Start VNC Server**:
    ```bash
    # Default port 5901
    ./vnc_control.sh start
@@ -32,8 +39,9 @@
    adb shell am broadcast -a com.app.streamify.START_VNC_ADB --ei vnc_port 5902
    ```
 
-7. **Grant permission** screen capture di HP A
-8. **Catat IP address dan port** yang muncul
+8. **Grant permission** screen capture di HP A
+9. **Catat IP address dan port** yang muncul
+10. **Verify status**: Pastikan ada **"✅ Remote control ready"**
 
 ---
 
@@ -47,6 +55,10 @@
    - Port: `5901` (atau port custom yang diset di HP A)
 5. **Tap "Connect"**
 6. **Layar HP A muncul di HP B** ✅
+7. **Test Remote Control**:
+   - **Tap layar di HP B** → HP A akan ke-tap
+   - **Drag di HP B** → HP A akan swipe
+   - **Semua gesture** diterjemahkan real-time!
 
 ---
 
