@@ -9,8 +9,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -19,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -337,7 +334,7 @@ fun ClientScreen(
             }
             
             Text(
-                text = "VNC Client",
+                text = "VNC Mirror Client",
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -366,9 +363,16 @@ fun ClientScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Connect to VNC Server",
+                        text = "Screen Mirror (View Only)",
                         fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    
+                    Text(
+                        text = "Connect to view remote screen without control",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     
                     OutlinedTextField(
@@ -481,66 +485,15 @@ fun ClientScreen(
                         .background(Color.Black),
                     contentAlignment = Alignment.Center
                 ) {
-                    // Display received frame or placeholder
+                    // Display received frame or placeholder - MIRROR ONLY (NO TOUCH INPUT)
                     if (currentFrame != null) {
                         Image(
                             bitmap = currentFrame.asImageBitmap(),
-                            contentDescription = "Remote Screen",
+                            contentDescription = "Remote Screen Mirror",
                             contentScale = ContentScale.Fit,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(Unit) {
-                                    detectTapGestures(
-                                        onTap = { offset ->
-                                            // Calculate touch coordinates relative to frame
-                                            val frameWidth = currentFrame.width
-                                            val frameHeight = currentFrame.height
-                                            
-                                            // Scale touch coordinates to match remote screen
-                                            val scaleX = frameWidth.toFloat() / size.width
-                                            val scaleY = frameHeight.toFloat() / size.height
-                                            
-                                            val remoteX = (offset.x * scaleX).toInt()
-                                            val remoteY = (offset.y * scaleY).toInt()
-                                            
-                                            Log.d("ClientActivity", "Touch detected at ($remoteX, $remoteY)")
-                                            
-                                            // Send tap as mouse click (button down + up) in background thread
-                                            vncClient?.let { client ->
-                                                Thread {
-                                                    Log.d("ClientActivity", "Sending pointer down at ($remoteX, $remoteY)")
-                                                    client.sendPointerEvent(remoteX, remoteY, 1) // Button down
-                                                    Thread.sleep(50) // Short delay
-                                                    Log.d("ClientActivity", "Sending pointer up at ($remoteX, $remoteY)")
-                                                    client.sendPointerEvent(remoteX, remoteY, 0) // Button up
-                                                }.start()
-                                            }
-                                        }
-                                    )
-                                }
-                                .pointerInput(Unit) {
-                                    detectDragGestures { change, _ ->
-                                        // Handle drag as mouse move
-                                        val frameWidth = currentFrame.width
-                                        val frameHeight = currentFrame.height
-                                        
-                                        val scaleX = frameWidth.toFloat() / size.width
-                                        val scaleY = frameHeight.toFloat() / size.height
-                                        
-                                        val remoteX = (change.position.x * scaleX).toInt()
-                                        val remoteY = (change.position.y * scaleY).toInt()
-                                        
-                                        Log.d("ClientActivity", "Drag detected at ($remoteX, $remoteY)")
-                                        
-                                        // Send pointer move (no button pressed) in background thread
-                                        vncClient?.let { client ->
-                                            Thread {
-                                                client.sendPointerEvent(remoteX, remoteY, 0)
-                                            }.start()
-                                        }
-                                    }
-                                }
+                            modifier = Modifier.fillMaxSize()
                         )
+                                        
                     } else {
                         // Placeholder while waiting for frames
                         Canvas(

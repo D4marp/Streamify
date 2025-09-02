@@ -238,11 +238,12 @@ class VncServer(
                             handleFramebufferUpdateRequest()
                         }
                         4 -> {
-                            handleKeyEvent()
+                            // KEY EVENTS DISABLED - MIRROR ONLY MODE  
+                            handleKeyEventDisabled()
                         }
                         5 -> {
-                            // REMOTE CONTROL - pointer events
-                            handlePointerEvent()
+                            // POINTER EVENTS DISABLED - MIRROR ONLY MODE
+                            handlePointerEventDisabled()
                         }
                         6 -> {
                             handleClientCutText()
@@ -707,6 +708,19 @@ class VncServer(
         }
     }
 
+    // MIRROR ONLY MODE - KEY EVENTS DISABLED
+    private fun handleKeyEventDisabled() {
+        try {
+            // Read and discard key event data without performing any action
+            inputStream?.skipBytes(1) // padding
+            inputStream?.readInt() // key
+            inputStream?.readInt() // down flag
+            // No key simulation - mirror only mode
+        } catch (e: Exception) {
+            // Silently handle errors in key event consumption
+        }
+    }
+
     private fun handleKeyEvent() {
         try {
             inputStream?.skipBytes(1) // padding
@@ -717,6 +731,22 @@ class VncServer(
         }
     }
 
+    // MIRROR ONLY MODE - POINTER EVENTS DISABLED
+    private fun handlePointerEventDisabled() {
+        try {
+            // Read and discard pointer event data without performing any action
+            val buttonMask = inputStream?.readByte()?.toInt() ?: 0
+            val x = inputStream?.readShort()?.toInt() ?: 0
+            val y = inputStream?.readShort()?.toInt() ?: 0
+            
+            // Log silently that pointer event was ignored (if logging enabled)
+            // No touch simulation - mirror only mode
+            
+        } catch (e: Exception) {
+            // Silently handle errors in pointer event consumption
+        }
+    }
+    
     private fun handlePointerEvent() {
         logD( "=== ENTERING handlePointerEvent ===")
         try {

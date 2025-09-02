@@ -543,11 +543,18 @@ fun StreamifyApp(
         ) {
             // Header
             Text(
-                text = "Streamify",
+                text = "Streamify Mirror",
                 fontSize = 32.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 24.dp),
                 color = colorResource(id = R.color.green)
+            )
+            
+            Text(
+                text = "Screen Mirror - View Only Mode",
+                fontSize = 16.sp,
+                color = colorResource(id = R.color.green).copy(alpha = 0.8f),
+                modifier = Modifier.padding(bottom = 24.dp)
             )
 
             // Mode Selection Card
@@ -605,7 +612,7 @@ fun StreamifyApp(
                             )
                         ) {
                             Text(
-                                text = "Client Mode\n(View Stream)",
+                                text = "Mirror Client\n(View Only)",
                                 color = colorResource(id = R.color.light),
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium
@@ -632,7 +639,7 @@ fun StreamifyApp(
                             )
                         ) {
                             Text(
-                                text = "Start VNC\nServer",
+                                text = "Start Mirror\nServer",
                                 color = colorResource(id = R.color.light),
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium

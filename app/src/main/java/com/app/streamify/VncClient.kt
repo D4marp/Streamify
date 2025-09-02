@@ -253,58 +253,18 @@ class VncClient(private val serverIp: String, private val serverPort: Int) {
         }
     }
 
+    // MIRROR ONLY MODE - POINTER EVENTS DISABLED
     fun sendPointerEvent(x: Int, y: Int, buttonMask: Int) {
-        try {
-            if (!isConnected.get()) {
-                Log.w(TAG, "Cannot send pointer event: not connected")
-                return
-            }
-            
-            val outputStream = output
-            if (outputStream == null) {
-                Log.w(TAG, "Cannot send pointer event: output stream is null")
-                return
-            }
-            
-            // VNC Pointer Event message type = 5
-            outputStream.writeByte(5)           // Message type
-            outputStream.writeByte(buttonMask)  // Button mask (1 = left button down, 0 = up)
-            outputStream.writeShort(x)          // X position
-            outputStream.writeShort(y)          // Y position
-            outputStream.flush()
-            
-            Log.d(TAG, "Sent pointer event: ($x, $y) button=$buttonMask")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error sending pointer event: ${e.message}", e)
-            listener?.onError("Failed to send pointer event: ${e.message}")
-        }
+        // Disabled for mirror-only mode
+        // No pointer events are sent to maintain view-only functionality
+        return
     }
     
+    // MIRROR ONLY MODE - KEY EVENTS DISABLED  
     fun sendKeyEvent(key: Int, down: Boolean) {
-        try {
-            if (!isConnected.get()) {
-                Log.w(TAG, "Cannot send key event: not connected")
-                return
-            }
-            
-            val outputStream = output
-            if (outputStream == null) {
-                Log.w(TAG, "Cannot send key event: output stream is null")
-                return
-            }
-            
-            // VNC Key Event message type = 4
-            outputStream.writeByte(4)               // Message type
-            outputStream.writeByte(if (down) 1 else 0)  // Down flag
-            outputStream.writeShort(0)              // Padding
-            outputStream.writeInt(key)              // Key symbol
-            outputStream.flush()
-            
-            Log.d(TAG, "Sent key event: key=$key down=$down")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error sending key event: ${e.message}", e)
-            listener?.onError("Failed to send key event: ${e.message}")
-        }
+        // Disabled for mirror-only mode
+        // No key events are sent to maintain view-only functionality
+        return
     }
 
     fun disconnect() {
