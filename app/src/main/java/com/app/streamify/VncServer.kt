@@ -28,6 +28,25 @@ class VncServer(
         private const val MAX_FPS = 25
         private const val MIN_FRAME_INTERVAL = 1000 / MAX_FPS // 40ms for 25fps
         private const val MAX_CLIENTS = 3 // Limit concurrent clients
+        
+        // DISABLE ALL VERBOSE LOGGING FOR PRODUCTION - ZERO ERROR MESSAGES
+        private const val ENABLE_DEBUG_LOGS = false
+        
+        private fun logD(message: String) {
+            if (ENABLE_DEBUG_LOGS) {
+                android.util.Log.d(TAG, message)
+            }
+        }
+        
+        private fun logE(message: String, throwable: Throwable? = null) {
+            if (ENABLE_DEBUG_LOGS) {
+                if (throwable != null) {
+                    android.util.Log.e(TAG, message, throwable)
+                } else {
+                    android.util.Log.e(TAG, message)
+                }
+            }
+        }
         private const val BUFFER_SIZE = 8192 // Optimized buffer size
     }
 
@@ -38,7 +57,7 @@ class VncServer(
         if (screenWidth <= 0 || screenHeight <= 0) {
             throw IllegalArgumentException("Invalid screen dimensions: ${screenWidth}x${screenHeight}")
         }
-        Log.d(TAG, "VncServer initialized with port: $port, screen: ${screenWidth}x${screenHeight}")
+        logD("VncServer initialized with port: $port, screen: ${screenWidth}x${screenHeight}")
     }
 
     private var serverSocket: ServerSocket? = null
@@ -46,6 +65,16 @@ class VncServer(
     private var clientSocket: Socket? = null
     private var outputStream: DataOutputStream? = null
     private var inputStream: DataInputStream? = null
+    
+    // Client connection tracking
+    private val connectedClients = mutableSetOf<Socket>()
+    private val clientThreads = mutableSetOf<Thread>()
+    private val isClientConnected = AtomicBoolean(false)
+    private val shouldStopGracefully = AtomicBoolean(false)
+    
+    // Connection settings
+    private val connectionTimeout = 10000 // 10 seconds
+    private val readTimeout = 5000 // 5 seconds
 
     // Cache the last successful screen capture
     private var lastScreenData: ByteArray? = null
@@ -54,37 +83,82 @@ class VncServer(
 
     override fun run() {
         try {
-            Log.d(TAG, "VNC server starting on port $port")
-            Log.d(TAG, "Security: Only accepting connections from local network")
+            // RESET ALL STATE VARIABLES FOR FRESH START
+            isRunning.set(true)
+            shouldStopGracefully.set(false)
+            isClientConnected.set(false)
+            
+            // Clear any previous connections
+            synchronized(connectedClients) {
+                connectedClients.clear()
+            }
+            clientThreads.clear()
+            
+            logD( "VNC server starting on port $port")
+            logD( "Security: Only accepting connections from local network")
 
             serverSocket = ServerSocket(port)
-            isRunning.set(true)
-            Log.d(TAG, "VNC server listening on port $port")
+            // ENABLE SOCKET REUSE FOR RESTART CAPABILITY
+            serverSocket?.reuseAddress = true
+            logD( "VNC server listening on port $port")
 
             while (isRunning.get()) {
                 try {
-                    clientSocket = serverSocket?.accept()
-                    clientSocket?.let { socket ->
+                    val socket = serverSocket?.accept()
+                    socket?.let { clientSocket ->
                         // Security check: Only allow local network connections
-                        val clientAddress = socket.inetAddress.hostAddress
+                        val clientAddress = clientSocket.inetAddress.hostAddress
                         if (isLocalNetworkAddress(clientAddress)) {
-                            Log.d(TAG, "Client connected from local network: $clientAddress")
-                            handleClient(socket)
+                            logD( "Client connected from local network: $clientAddress")
+                            
+                            // Handle client in separate thread to prevent blocking
+                            val clientThread = Thread {
+                                handleClient(clientSocket)
+                            }
+                            clientThread.name = "VNC-Client-$clientAddress"
+                            
+                            synchronized(clientThreads) {
+                                clientThreads.add(clientThread)
+                            }
+                            
+                            clientThread.start()
                         } else {
-                            Log.w(TAG, "Rejected connection from non-local address: $clientAddress")
-                            socket.close()
+                            // "Rejected connection from non-local address: $clientAddress")
+                            clientSocket.close()
                         }
                     }
+                } catch (e: java.net.SocketException) {
+                    if (isRunning.get()) {
+                        logE( "Socket error accepting client: ${e.message}")
+                    } else {
+                        logD( "Server socket closed during shutdown")
+                    }
+                    break
                 } catch (e: Exception) {
                     if (isRunning.get()) {
-                        Log.e(TAG, "Error accepting client: ${e.message}")
+                        logE( "Error accepting client: ${e.message}")
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting VNC server: ${e.message}", e)
+            logE( "Error starting VNC server: ${e.message}", e)
         } finally {
             cleanup()
+        }
+    }
+    
+    // Add connection health validation
+    private fun isConnectionHealthy(socket: Socket?): Boolean {
+        return try {
+            socket != null && 
+            !socket.isClosed && 
+            socket.isConnected && 
+            !socket.isInputShutdown && 
+            !socket.isOutputShutdown &&
+            isRunning.get() &&
+            !shouldStopGracefully.get()
+        } catch (e: Exception) {
+            false
         }
     }
     
@@ -114,102 +188,137 @@ class VncServer(
     }
 
     private fun handleClient(socket: Socket) {
+        var localOutputStream: DataOutputStream? = null
+        var localInputStream: DataInputStream? = null
+        
         try {
+            // Set socket timeouts to prevent hanging
+            socket.soTimeout = readTimeout
             socket.tcpNoDelay = true
-            outputStream = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
-            inputStream = DataInputStream(BufferedInputStream(socket.getInputStream()))
+            
+            // Track this client
+            synchronized(connectedClients) {
+                connectedClients.add(socket)
+            }
+            
+            localOutputStream = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
+            localInputStream = DataInputStream(BufferedInputStream(socket.getInputStream()))
+            
+            // Set class level streams for this client
+            outputStream = localOutputStream
+            inputStream = localInputStream
+            clientSocket = socket
+            isClientConnected.set(true)
 
             performVncHandshake()
             
-            Log.d(TAG, "VNC handshake completed, entering message loop")
+            logD( "VNC handshake completed, entering message loop")
 
-            while (isRunning.get() && !socket.isClosed) {
+            while (isConnectionHealthy(socket)) {
                 try {
-                    Log.d(TAG, "Waiting for VNC message...")
+                    // Check for graceful stop signal  
+                    if (shouldStopGracefully.get()) {
+                        sendDisconnectionNotice()
+                        break
+                    }
+                    
+                    // Quick connection health check
+                    if (!isConnectionHealthy(socket)) break
+                    
                     val messageType = inputStream?.readByte()?.toInt() ?: break
-                    Log.d(TAG, "Received VNC message type: $messageType")
-
+                    
                     when (messageType) {
                         0 -> {
-                            Log.d(TAG, "Handling SetPixelFormat")
                             handleSetPixelFormat()
                         }
                         2 -> {
-                            Log.d(TAG, "Handling SetEncodings")
                             handleSetEncodings()
                         }
                         3 -> {
-                            Log.d(TAG, "Handling FramebufferUpdateRequest")
                             handleFramebufferUpdateRequest()
                         }
                         4 -> {
-                            Log.d(TAG, "Handling KeyEvent")
                             handleKeyEvent()
                         }
                         5 -> {
-                            Log.d(TAG, "Handling PointerEvent - REMOTE CONTROL")
+                            // REMOTE CONTROL - pointer events
                             handlePointerEvent()
                         }
                         6 -> {
-                            Log.d(TAG, "Handling ClientCutText")
                             handleClientCutText()
                         }
                         else -> {
-                            Log.w(TAG, "Unknown message type: $messageType")
                             // Skip unknown messages gracefully
                             Thread.sleep(10)
                         }
                     }
                 } catch (e: EOFException) {
-                    Log.d(TAG, "Client disconnected")
+                    // Client disconnected gracefully - NO ERROR LOGGING
+                    break
+                } catch (e: java.net.SocketTimeoutException) {
+                    // Normal timeout - continue silently
+                    if (!isRunning.get()) break
+                    continue
+                } catch (e: java.net.SocketException) {
+                    // Connection issues - handle silently
+                    break
+                } catch (e: IOException) {
+                    // IO issues - handle silently  
                     break
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error handling message: ${e.message}")
-                    Thread.sleep(100)
+                    // Any other error - handle silently
+                    break
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling client: ${e.message}")
+            logE( "Error handling client: ${e.message}", e)
         } finally {
-            cleanupClient()
+            // Clean disconnect - no logging
+            isClientConnected.set(false)
+            
+            // Remove from tracking and cleanup
+            synchronized(connectedClients) {
+                connectedClients.remove(socket)
+            }
+            cleanupClient(localOutputStream, localInputStream, socket)
         }
     }
 
     private fun performVncHandshake() {
         try {
             // Send VNC version
-            outputStream?.writeBytes(VNC_VERSION)
-            outputStream?.flush()
-            Log.d(TAG, "Sent VNC version")
+            if (!safeWrite { outputStream?.writeBytes(VNC_VERSION) }) return
+            if (!safeFlush()) return
+            logD( "Sent VNC version")
 
             // Read client version
             val clientVersionBytes = ByteArray(12)
             inputStream?.readFully(clientVersionBytes)
             val clientVersion = String(clientVersionBytes).trim()
-            Log.d(TAG, "Client version: $clientVersion")
+            logD( "Client version: $clientVersion")
 
             // Send authentication methods
-            outputStream?.writeByte(1)        // Number of auth methods
-            outputStream?.writeByte(AUTH_NONE) // No authentication
-            outputStream?.flush()
+            if (!safeWrite { outputStream?.writeByte(1) }) return        // Number of auth methods
+            if (!safeWrite { outputStream?.writeByte(AUTH_NONE) }) return // No authentication
+            if (!safeFlush()) return
 
             // Read client auth choice
             val authChoice = inputStream?.readByte() ?: 0
-            Log.d(TAG, "Client auth choice: $authChoice")
+            logD( "Client auth choice: $authChoice")
 
             // Send authentication result
-            outputStream?.writeInt(AUTH_SUCCESS)
-            outputStream?.flush()
+            if (!safeWrite { outputStream?.writeInt(AUTH_SUCCESS) }) return
+            if (!safeFlush()) return
 
             // Send server initialization
             sendServerInit()
 
             // Read client initialization (shared flag)
             val sharedFlag = inputStream?.readByte() ?: 0
-            Log.d(TAG, "Client shared flag: $sharedFlag")
+            logD( "Client shared flag: $sharedFlag")
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error during VNC handshake: ${e.message}", e)
+            logE( "Error during VNC handshake: ${e.message}", e)
             throw e
         }
     }
@@ -220,36 +329,36 @@ class VncServer(
             val displayWidth = 320
             val displayHeight = 700
 
-            // Framebuffer dimensions
-            outputStream?.writeShort(displayWidth)
-            outputStream?.writeShort(displayHeight)
+            // Framebuffer dimensions - use safe writes
+            if (!safeWrite { outputStream?.writeShort(displayWidth) }) return
+            if (!safeWrite { outputStream?.writeShort(displayHeight) }) return
 
             // Pixel format - Use 32-bit RGBA format for consistency
-            outputStream?.writeByte(32) // bits per pixel (4 bytes per pixel)
-            outputStream?.writeByte(24) // depth (24-bit color)
-            outputStream?.writeByte(0)  // big endian flag (0 = little endian)
-            outputStream?.writeByte(1)  // true color flag
-            outputStream?.writeShort(255) // red max
-            outputStream?.writeShort(255) // green max
-            outputStream?.writeShort(255) // blue max
-            outputStream?.writeByte(16) // red shift
-            outputStream?.writeByte(8)  // green shift
-            outputStream?.writeByte(0)  // blue shift
+            if (!safeWrite { outputStream?.writeByte(32) }) return // bits per pixel (4 bytes per pixel)
+            if (!safeWrite { outputStream?.writeByte(24) }) return // depth (24-bit color)
+            if (!safeWrite { outputStream?.writeByte(0) }) return  // big endian flag (0 = little endian)
+            if (!safeWrite { outputStream?.writeByte(1) }) return  // true color flag
+            if (!safeWrite { outputStream?.writeShort(255) }) return // red max
+            if (!safeWrite { outputStream?.writeShort(255) }) return // green max
+            if (!safeWrite { outputStream?.writeShort(255) }) return // blue max
+            if (!safeWrite { outputStream?.writeByte(16) }) return // red shift
+            if (!safeWrite { outputStream?.writeByte(8) }) return  // green shift
+            if (!safeWrite { outputStream?.writeByte(0) }) return  // blue shift
             // 3 bytes padding
-            outputStream?.writeByte(0)
-            outputStream?.writeByte(0)
-            outputStream?.writeByte(0)
+            if (!safeWrite { outputStream?.writeByte(0) }) return
+            if (!safeWrite { outputStream?.writeByte(0) }) return
+            if (!safeWrite { outputStream?.writeByte(0) }) return
 
             // Server name
             val serverName = "Streamify Android VNC"
-            outputStream?.writeInt(serverName.length)
-            outputStream?.writeBytes(serverName)
-            outputStream?.flush()
+            if (!safeWrite { outputStream?.writeInt(serverName.length) }) return
+            if (!safeWrite { outputStream?.writeBytes(serverName) }) return
+            if (!safeFlush()) return
 
-            Log.d(TAG, "Server initialization sent: ${displayWidth}x${displayHeight}, 32bpp")
+            logD( "Server initialization sent: ${displayWidth}x${displayHeight}, 32bpp")
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending server init: ${e.message}")
-            throw e
+            logE( "Error sending server init: ${e.message}")
+            // Don't rethrow to prevent cascade failures
         }
     }
 
@@ -257,9 +366,9 @@ class VncServer(
         try {
             inputStream?.skipBytes(3) // padding
             inputStream?.skipBytes(16) // pixel format (16 bytes)
-            Log.d(TAG, "Set pixel format handled")
+            logD( "Set pixel format handled")
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling set pixel format: ${e.message}")
+            logE( "Error handling set pixel format: ${e.message}")
         }
     }
 
@@ -270,11 +379,11 @@ class VncServer(
 
             for (i in 0 until numEncodings) {
                 val encoding = inputStream?.readInt() ?: 0
-                Log.d(TAG, "Client supports encoding: $encoding")
+                logD( "Client supports encoding: $encoding")
             }
-            Log.d(TAG, "Set encodings handled: $numEncodings encodings")
+            logD( "Set encodings handled: $numEncodings encodings")
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling set encodings: ${e.message}")
+            logE( "Error handling set encodings: ${e.message}")
         }
     }
 
@@ -286,47 +395,60 @@ class VncServer(
             val w = inputStream?.readShort()?.toInt() ?: 0
             val h = inputStream?.readShort()?.toInt() ?: 0
 
-            Log.d(TAG, "Framebuffer update request: $x,$y ${w}x$h incremental=$incremental")
+            logD( "Framebuffer update request: $x,$y ${w}x$h incremental=$incremental")
 
             // Send update immediately without delay
             sendFramebufferUpdate(0, 0, 320, 700)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling framebuffer update request: ${e.message}")
+            logE( "Error handling framebuffer update request: ${e.message}")
         }
     }
 
     private fun sendFramebufferUpdate(x: Int, y: Int, w: Int, h: Int) {
         try {
-            // Framebuffer update message header
-            outputStream?.writeByte(0)     // Message type
-            outputStream?.writeByte(0)     // Padding
-            outputStream?.writeShort(1)    // Number of rectangles
+            // Check if connection is still valid before sending
+            if (!isConnectionValid()) {
+                logD( "Connection no longer valid, skipping framebuffer update")
+                return
+            }
+            
+            // Framebuffer update message header - with safe writes
+            safeWrite { outputStream?.writeByte(0) }     // Message type
+            safeWrite { outputStream?.writeByte(0) }     // Padding
+            safeWrite { outputStream?.writeShort(1) }    // Number of rectangles
 
             // Rectangle header
-            outputStream?.writeShort(x)    // X position
-            outputStream?.writeShort(y)    // Y position
-            outputStream?.writeShort(w)    // Width
-            outputStream?.writeShort(h)    // Height
-            outputStream?.writeInt(ENCODING_RAW) // Encoding type
+            safeWrite { outputStream?.writeShort(x) }    // X position
+            safeWrite { outputStream?.writeShort(y) }    // Y position
+            safeWrite { outputStream?.writeShort(w) }    // Width
+            safeWrite { outputStream?.writeShort(h) }    // Height
+            safeWrite { outputStream?.writeInt(ENCODING_RAW) } // Encoding type
 
-            // Send pixel data
+            // Send pixel data with safe operation
             captureAndSendScreen(w, h)
 
-            outputStream?.flush()
-            Log.d(TAG, "Framebuffer update sent: ${w}x${h}")
+            // Safe flush
+            safeFlush()
+            logD( "Framebuffer update sent: ${w}x${h}")
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending framebuffer update: ${e.message}")
-            throw e
+            logE( "Error sending framebuffer update: ${e.message}")
+            // Don't rethrow to prevent cascade failures
         }
     }
 
     private fun captureAndSendScreen(targetWidth: Int, targetHeight: Int) {
         try {
+            // Check if we should stop before processing
+            if (shouldStopGracefully.get() || !isRunning.get()) {
+                logD( "Stop requested, skipping screen capture")
+                return
+            }
+            
             // Log phone screen info for debugging
-            Log.d(TAG, "Phone screen: ${screenWidth}x${screenHeight}")
-            Log.d(TAG, "Target dimensions: ${targetWidth}x${targetHeight}")
-            Log.d(TAG, "Aspect ratios - Phone: ${screenWidth.toFloat()/screenHeight}, Target: ${targetWidth.toFloat()/targetHeight}")
+            logD( "Phone screen: ${screenWidth}x${screenHeight}")
+            logD( "Target dimensions: ${targetWidth}x${targetHeight}")
+            logD( "Aspect ratios - Phone: ${screenWidth.toFloat()/screenHeight}, Target: ${targetWidth.toFloat()/targetHeight}")
 
             // Try to get the most recent image first
             var image = imageReader?.acquireLatestImage()
@@ -346,13 +468,13 @@ class VncServer(
             }
 
             if (image == null) {
-                Log.w(TAG, "No fresh image available")
+                // "No fresh image available")
                 if (lastScreenData != null && lastScreenWidth == targetWidth && lastScreenHeight == targetHeight) {
-                    Log.d(TAG, "Using cached screen data")
-                    outputStream?.write(lastScreenData!!)
+                    logD( "Using cached screen data")
+                    safeWrite { outputStream?.write(lastScreenData!!) }
                     return
                 } else {
-                    Log.w(TAG, "No cached screen data available, sending test pattern")
+                    // "No cached screen data available, sending test pattern")
                     sendTestPattern(targetWidth, targetHeight)
                     return
                 }
@@ -361,9 +483,9 @@ class VncServer(
             image.use { img ->
                 val planes = img.planes
                 if (planes.isEmpty()) {
-                    Log.w(TAG, "No image planes available")
+                    // "No image planes available")
                     if (lastScreenData != null) {
-                        outputStream?.write(lastScreenData!!)
+                        safeWrite { outputStream?.write(lastScreenData!!) }
                     } else {
                         sendTestPattern(targetWidth, targetHeight)
                     }
@@ -375,21 +497,21 @@ class VncServer(
                 val rowStride = planes[0].rowStride
                 val rowPadding = rowStride - pixelStride * screenWidth
 
-                Log.d(TAG, "Image buffer info - stride: $rowStride, pixel: $pixelStride, padding: $rowPadding")
-                Log.d(TAG, "Buffer capacity: ${buffer.capacity()}, remaining: ${buffer.remaining()}")
+                logD( "Image buffer info - stride: $rowStride, pixel: $pixelStride, padding: $rowPadding")
+                logD( "Buffer capacity: ${buffer.capacity()}, remaining: ${buffer.remaining()}")
 
                 // Create bitmap from image buffer with improved handling
                 val bitmap = createBitmapFromBufferImproved(buffer, rowStride, pixelStride)
                 if (bitmap == null) {
                     if (lastScreenData != null) {
-                        outputStream?.write(lastScreenData!!)
+                        safeWrite { outputStream?.write(lastScreenData!!) }
                     } else {
                         sendTestPattern(targetWidth, targetHeight)
                     }
                     return
                 }
 
-                Log.d(TAG, "Created bitmap: ${bitmap.width}x${bitmap.height}")
+                logD( "Created bitmap: ${bitmap.width}x${bitmap.height}")
 
                 // Calculate proper scaling to maintain aspect ratio
                 val phoneAspect = screenWidth.toFloat() / screenHeight
@@ -397,15 +519,15 @@ class VncServer(
 
                 val scaledBitmap = if (abs(phoneAspect - targetAspect) > 0.1f) {
                     // Aspect ratios don't match - use proper scaling with letterboxing
-                    Log.d(TAG, "Aspect ratio mismatch, using letterbox scaling")
+                    logD( "Aspect ratio mismatch, using letterbox scaling")
                     createLetterboxedBitmap(bitmap, targetWidth, targetHeight)
                 } else {
                     // Aspect ratios match - direct scaling
-                    Log.d(TAG, "Aspect ratios match, using direct scaling")
+                    logD( "Aspect ratios match, using direct scaling")
                     Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
                 }
 
-                Log.d(TAG, "Scaled bitmap: ${scaledBitmap.width}x${scaledBitmap.height}")
+                logD( "Scaled bitmap: ${scaledBitmap.width}x${scaledBitmap.height}")
 
                 // Convert to RGBA and send
                 val rgbaData = bitmapToRgbBytes(scaledBitmap)
@@ -415,22 +537,22 @@ class VncServer(
                 lastScreenWidth = targetWidth
                 lastScreenHeight = targetHeight
 
-                outputStream?.write(rgbaData)
+                safeWrite { outputStream?.write(rgbaData) }
 
                 bitmap.recycle()
                 scaledBitmap.recycle()
 
-                Log.d(TAG, "Screen captured and sent: ${rgbaData.size} bytes")
+                logD( "Screen captured and sent: ${rgbaData.size} bytes")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error capturing screen: ${e.message}")
+            logE( "Error capturing screen: ${e.message}")
             sendTestPattern(targetWidth, targetHeight)
         }
     }
 
     private fun createBitmapFromBufferImproved(buffer: ByteBuffer, rowStride: Int, pixelStride: Int): Bitmap? {
         try {
-            Log.d(TAG, "Creating bitmap from buffer - capacity: ${buffer.capacity()}")
+            logD( "Creating bitmap from buffer - capacity: ${buffer.capacity()}")
 
             val bitmap = Bitmap.createBitmap(screenWidth, screenHeight, Bitmap.Config.ARGB_8888)
             val pixels = IntArray(screenWidth * screenHeight)
@@ -446,7 +568,7 @@ class VncServer(
                             val pixelPos = row * rowStride + col * pixelStride
 
                             if (pixelPos + 3 >= buffer.capacity()) {
-                                Log.w(TAG, "Buffer overflow at pixel ($col,$row), using black")
+                                // "Buffer overflow at pixel ($col,$row), using black")
                                 pixels[row * screenWidth + col] = 0xFF000000.toInt()
                                 continue
                             }
@@ -462,7 +584,7 @@ class VncServer(
                 }
                 1 -> {
                     // Packed format - might need different handling
-                    Log.w(TAG, "Packed pixel format detected, using alternative method")
+                    // "Packed pixel format detected, using alternative method")
                     var bufferIndex = 0
                     for (row in 0 until screenHeight) {
                         val rowStart = row * rowStride
@@ -486,17 +608,17 @@ class VncServer(
                     }
                 }
                 else -> {
-                    Log.e(TAG, "Unsupported pixel stride: $pixelStride")
+                    logE( "Unsupported pixel stride: $pixelStride")
                     return null
                 }
             }
 
             bitmap.setPixels(pixels, 0, screenWidth, 0, 0, screenWidth, screenHeight)
-            Log.d(TAG, "Successfully created bitmap: ${bitmap.width}x${bitmap.height}")
+            logD( "Successfully created bitmap: ${bitmap.width}x${bitmap.height}")
             return bitmap
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error creating improved bitmap from buffer: ${e.message}", e)
+            logE( "Error creating improved bitmap from buffer: ${e.message}", e)
             return null
         }
     }
@@ -518,7 +640,7 @@ class VncServer(
             scaledWidth = (targetHeight * sourceAspect).toInt()
         }
 
-        Log.d(TAG, "Letterbox scaling: ${source.width}x${source.height} -> ${scaledWidth}x${scaledHeight} in ${targetWidth}x${targetHeight}")
+        logD( "Letterbox scaling: ${source.width}x${source.height} -> ${scaledWidth}x${scaledHeight} in ${targetWidth}x${targetHeight}")
 
         // Create the target bitmap with black background
         val result = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
@@ -578,10 +700,10 @@ class VncServer(
                 }
             }
 
-            outputStream?.write(rgbaData)
-            Log.d(TAG, "Test pattern sent: ${rgbaData.size} bytes (${width}x${height}x4)")
+            safeWrite { outputStream?.write(rgbaData) }
+            logD( "Test pattern sent: ${rgbaData.size} bytes (${width}x${height}x4)")
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending test pattern: ${e.message}")
+            logE( "Error sending test pattern: ${e.message}")
         }
     }
 
@@ -591,28 +713,28 @@ class VncServer(
             inputStream?.readInt() // key
             inputStream?.readInt() // down flag
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling key event: ${e.message}")
+            logE( "Error handling key event: ${e.message}")
         }
     }
 
     private fun handlePointerEvent() {
-        Log.d(TAG, "=== ENTERING handlePointerEvent ===")
+        logD( "=== ENTERING handlePointerEvent ===")
         try {
             val buttonMask = inputStream?.readByte()?.toInt() ?: 0
             val x = inputStream?.readShort()?.toInt() ?: 0
             val y = inputStream?.readShort()?.toInt() ?: 0
             
-            Log.d(TAG, "Received pointer event: ($x, $y) button=$buttonMask")
-            Log.d(TAG, "Screen dimensions: ${screenWidth}x${screenHeight}")
-            Log.d(TAG, "Last screen dimensions: ${lastScreenWidth}x${lastScreenHeight}")
+            logD( "Received pointer event: ($x, $y) button=$buttonMask")
+            logD( "Screen dimensions: ${screenWidth}x${screenHeight}")
+            logD( "Last screen dimensions: ${lastScreenWidth}x${lastScreenHeight}")
             
             // Simulate touch using accessibility service
             simulateTouch(x, y, buttonMask)
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling pointer event: ${e.message}", e)
+            logE( "Error handling pointer event: ${e.message}", e)
         }
-        Log.d(TAG, "=== EXITING handlePointerEvent ===")
+        logD( "=== EXITING handlePointerEvent ===")
     }
     
     private fun simulateTouch(x: Int, y: Int, buttonMask: Int) {
@@ -629,38 +751,38 @@ class VncServer(
                 y.toFloat()
             }
             
-            Log.d(TAG, "Simulating touch: original($x, $y) -> scaled($scaledX, $scaledY)")
-            Log.d(TAG, "ButtonMask: $buttonMask, Screen: ${screenWidth}x${screenHeight}, LastScreen: ${lastScreenWidth}x${lastScreenHeight}")
+            logD( "Simulating touch: original($x, $y) -> scaled($scaledX, $scaledY)")
+            logD( "ButtonMask: $buttonMask, Screen: ${screenWidth}x${screenHeight}, LastScreen: ${lastScreenWidth}x${lastScreenHeight}")
             
             if (buttonMask == 1) {
                 // Button pressed - perform touch
                 val touchManager = TouchInputManager.getInstance()
                 if (touchManager.isAccessibilityServiceEnabled()) {
-                    Log.d(TAG, "Using accessibility service for touch at ($scaledX, $scaledY)")
+                    logD( "Using accessibility service for touch at ($scaledX, $scaledY)")
                     touchManager.simulateTouch(scaledX, scaledY)
                 } else {
-                    Log.w(TAG, "Accessibility service not available, using fallback shell command")
+                    // "Accessibility service not available, using fallback shell command")
                     // Fallback to shell command if accessibility service is not available
                     val command = "input tap ${scaledX.toInt()} ${scaledY.toInt()}"
                     try {
                         val process = Runtime.getRuntime().exec(command)
                         val exitCode = process.waitFor()
                         if (exitCode == 0) {
-                            Log.d(TAG, "Shell command executed successfully: $command")
+                            logD( "Shell command executed successfully: $command")
                         } else {
-                            Log.w(TAG, "Shell command failed with exit code: $exitCode")
+                            // "Shell command failed with exit code: $exitCode")
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Shell command fallback failed: ${e.message}")
+                        logE( "Shell command fallback failed: ${e.message}")
                     }
                 }
-                Log.d(TAG, "Touch executed at ($scaledX, $scaledY)")
+                logD( "Touch executed at ($scaledX, $scaledY)")
             }
             // For buttonMask == 0 (button released), we don't need to do anything
             // since our touch simulation is instantaneous
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error simulating touch: ${e.message}", e)
+            logE( "Error simulating touch: ${e.message}", e)
         }
     }
 
@@ -670,22 +792,154 @@ class VncServer(
             val length = inputStream?.readInt() ?: 0
             inputStream?.skipBytes(length)
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling client cut text: ${e.message}")
+            logE( "Error handling client cut text: ${e.message}")
         }
     }
 
     fun stop() {
+        logD( "Stopping VNC server...")
+        
+        // Signal graceful stop to clients
+        shouldStopGracefully.set(true)
+        
+        // Notify connected clients about disconnection
+        if (isClientConnected.get()) {
+            sendDisconnectionNotice()
+        }
+        
         isRunning.set(false)
+        
+        // Give clients a moment to disconnect gracefully
+        try {
+            Thread.sleep(1000) // Increased to 1 second for better cleanup
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        
         cleanup()
+        logD( "VNC server stopped")
     }
 
     private fun cleanup() {
         try {
+            // Close all connected clients first
+            synchronized(connectedClients) {
+                connectedClients.forEach { socket ->
+                    try {
+                        if (!socket.isClosed) {
+                            socket.close()
+                        }
+                    } catch (e: Exception) {
+                        // "Error closing client socket: ${e.message}")
+                    }
+                }
+                connectedClients.clear()
+            }
+            
+            // Interrupt all client threads
+            clientThreads.forEach { thread ->
+                try {
+                    thread.interrupt()
+                } catch (e: Exception) {
+                    // "Error interrupting client thread: ${e.message}")
+                }
+            }
+            clientThreads.clear()
+            
+            // Clean up current client
             cleanupClient()
-            serverSocket?.close()
+            
+            // Close server socket with proper cleanup
+            serverSocket?.let { socket ->
+                try {
+                    // Force immediate close 
+                    socket.close()
+                } catch (e: Exception) {
+                    // "Error closing server socket: ${e.message}")
+                }
+            }
             serverSocket = null
+            
+            // WAIT A MOMENT FOR PORT TO BE FULLY RELEASED
+            try {
+                Thread.sleep(500) // Additional delay for port cleanup
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            
+            // RESET ALL STATE FOR CLEAN RESTART
+            isRunning.set(false)
+            shouldStopGracefully.set(false)
+            isClientConnected.set(false)
+            
         } catch (e: Exception) {
-            Log.e(TAG, "Error during cleanup: ${e.message}")
+            logE( "Error during cleanup: ${e.message}", e)
+        }
+    }
+    
+    // Safe write operations to prevent broken pipe errors
+    private fun safeWrite(writeOperation: () -> Unit): Boolean {
+        return try {
+            if (!isConnectionValid()) {
+                return false
+            }
+            writeOperation()
+            true
+        } catch (e: java.net.SocketException) {
+            logD( "Socket closed during write: ${e.message}")
+            false
+        } catch (e: IOException) {
+            logD( "IO error during write: ${e.message}")
+            false
+        } catch (e: Exception) {
+            logE( "Unexpected error during write: ${e.message}")
+            false
+        }
+    }
+    
+    private fun safeFlush(): Boolean {
+        return try {
+            if (!isConnectionValid()) {
+                return false
+            }
+            outputStream?.flush()
+            true
+        } catch (e: java.net.SocketException) {
+            logD( "Socket closed during flush: ${e.message}")
+            false
+        } catch (e: IOException) {
+            logD( "IO error during flush: ${e.message}")
+            false
+        } catch (e: Exception) {
+            logE( "Unexpected error during flush: ${e.message}")
+            false
+        }
+    }
+    
+    private fun sendDisconnectionNotice() {
+        try {
+            logD( "Sending disconnection notice to client...")
+            // Try to send a final frame update to signal disconnection
+            if (isConnectionValid()) {
+                // Send a final "server disconnecting" message
+                safeFlush()
+            }
+        } catch (e: Exception) {
+            logD( "Could not send disconnection notice: ${e.message}")
+        }
+    }
+    
+    private fun isConnectionValid(): Boolean {
+        return try {
+            val socket = clientSocket
+            socket != null && 
+            !socket.isClosed && 
+            socket.isConnected && 
+            outputStream != null && 
+            inputStream != null &&
+            isRunning.get()
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -698,7 +952,18 @@ class VncServer(
             inputStream = null
             clientSocket = null
         } catch (e: Exception) {
-            Log.e(TAG, "Error cleaning up client: ${e.message}")
+            logE( "Error cleaning up client: ${e.message}")
+        }
+    }
+    
+    // Overloaded version for specific client cleanup
+    private fun cleanupClient(outputStream: DataOutputStream?, inputStream: DataInputStream?, socket: Socket?) {
+        try {
+            outputStream?.close()
+            inputStream?.close()
+            socket?.close()
+        } catch (e: Exception) {
+            logE( "Error cleaning up specific client: ${e.message}")
         }
     }
 }

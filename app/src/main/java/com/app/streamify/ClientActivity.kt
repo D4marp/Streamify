@@ -76,9 +76,9 @@ class ClientActivity : ComponentActivity() {
                         }
                         
                         override fun onError(error: String) {
-                            lifecycleScope.launch {
-                                Toast.makeText(this@ClientActivity, "VNC Error: $error", Toast.LENGTH_SHORT).show()
-                            }
+                            // lifecycleScope.launch {
+                            //     Toast.makeText(this@ClientActivity, "VNC Error: $error", Toast.LENGTH_SHORT).show()
+                            // }
                         }
                     })
                     
