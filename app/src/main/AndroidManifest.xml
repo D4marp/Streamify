@@ -55,6 +55,15 @@
             android:parentActivityName=".MainActivity">
         </activity>
 
+        <!-- Full Screen Mirror Activity -->
+        <activity
+            android:name=".FullScreenMirrorActivity"
+            android:exported="false"
+            android:label="Full Screen Mirror"
+            android:theme="@style/Theme.Streamify.Fullscreen"
+            android:parentActivityName=".MainActivity">
+        </activity>
+
         <!-- Server Configuration Activity -->
         <activity
             android:name=".ServerConfigActivity"

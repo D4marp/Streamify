@@ -22,6 +22,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
@@ -170,6 +172,17 @@ class MainActivity : ComponentActivity() {
                             startActivity(intent)
                         } catch (e: Exception) {
                             Toast.makeText(this@MainActivity, "Error starting client: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onFullScreenMirrorClick = { ip, port ->
+                        try {
+                            val intent = Intent(this@MainActivity, FullScreenMirrorActivity::class.java).apply {
+                                putExtra("server_ip", ip)
+                                putExtra("server_port", port)
+                            }
+                            startActivity(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(this@MainActivity, "Error starting full screen mirror: ${e.message}", Toast.LENGTH_SHORT).show()
                         }
                     },
                     onRequestPermission = {
@@ -509,6 +522,7 @@ fun StreamifyApp(
     currentPort: Int,
     onServerModeClick: () -> Unit,
     onClientModeClick: () -> Unit,
+    onFullScreenMirrorClick: (String, Int) -> Unit,
     onRequestPermission: () -> Unit,
     onStartServer: () -> Unit,
     onStopServer: () -> Unit
@@ -665,6 +679,51 @@ fun StreamifyApp(
                             )
                         }
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Full Screen Mirror Section
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSystemInDarkTheme())
+                        colorResource(id = R.color.card_dark)
+                    else
+                        colorResource(id = R.color.card_light)
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
+                ) {
+                    Text(
+                        text = "🖥️ Full Screen Mirror",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isSystemInDarkTheme())
+                            colorResource(id = R.color.light)
+                        else
+                            colorResource(id = R.color.dark),
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    Text(
+                        text = "Direct mirror dengan pure full screen - no UI elements",
+                        fontSize = 14.sp,
+                        color = if (isSystemInDarkTheme())
+                            colorResource(id = R.color.light)
+                        else
+                            colorResource(id = R.color.dark),
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                    
+                    FullScreenMirrorInput(
+                        onConnect = onFullScreenMirrorClick
+                    )
                 }
             }
 
@@ -909,4 +968,101 @@ fun getLocalIpAddress(): String? {
         Log.e("MainActivity", "Failed to get local IP address", e)
     }
     return null
+}
+
+@Composable
+fun FullScreenMirrorInput(
+    onConnect: (String, Int) -> Unit
+) {
+    var serverIp by remember { mutableStateOf("192.168.1.100") }
+    var serverPort by remember { mutableStateOf("5900") }
+    var isConnecting by remember { mutableStateOf(false) }
+    
+    val context = LocalContext.current
+    
+    Column {
+        // IP Address Input
+        OutlinedTextField(
+            value = serverIp,
+            onValueChange = { serverIp = it },
+            label = { Text("Server IP Address") },
+            placeholder = { Text("192.168.1.100") },
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = colorResource(id = R.color.green),
+                focusedLabelColor = colorResource(id = R.color.green)
+            )
+        )
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        // Port Input  
+        OutlinedTextField(
+            value = serverPort,
+            onValueChange = { serverPort = it },
+            label = { Text("Port") },
+            placeholder = { Text("5900") },
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = colorResource(id = R.color.green),
+                focusedLabelColor = colorResource(id = R.color.green)
+            )
+        )
+        
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        // Connect Button
+        Button(
+            onClick = {
+                if (serverIp.isBlank()) {
+                    Toast.makeText(context, "Please enter server IP", Toast.LENGTH_SHORT).show()
+                    return@Button
+                }
+                
+                val port = serverPort.toIntOrNull() ?: 5900
+                isConnecting = true
+                onConnect(serverIp, port)
+                isConnecting = false
+            },
+            enabled = !isConnecting,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = colorResource(id = R.color.green)
+            )
+        ) {
+            if (isConnecting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = colorResource(id = R.color.light)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(
+                text = if (isConnecting) "Connecting..." else "🚀 Full Screen Mirror",
+                color = colorResource(id = R.color.light),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        // Info text
+        Text(
+            text = "⚠️ Mirror akan langsung full screen tanpa UI controls",
+            fontSize = 12.sp,
+            color = if (isSystemInDarkTheme())
+                colorResource(id = R.color.light).copy(alpha = 0.7f)
+            else
+                colorResource(id = R.color.dark).copy(alpha = 0.7f),
+            style = androidx.compose.ui.text.TextStyle(
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+            )
+        )
+    }
 }
