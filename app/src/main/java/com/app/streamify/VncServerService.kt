@@ -27,6 +27,7 @@ class VncServerService : Service() {
         const val EXTRA_PORT = "vnc_port"
         const val ACTION_START_VNC = "START_VNC"
         const val ACTION_STOP_VNC = "STOP_VNC"
+        const val ACTION_FORCE_DISCONNECT_CLIENTS = "FORCE_DISCONNECT_CLIENTS"
     }
 
     private var mediaProjection: MediaProjection? = null
@@ -71,6 +72,10 @@ class VncServerService : Service() {
                 "STOP_VNC" -> {
                     Log.d(TAG, "Stopping VNC")
                     stopVncServer()
+                }
+                ACTION_FORCE_DISCONNECT_CLIENTS -> {
+                    Log.d(TAG, "Force disconnecting all clients")
+                    forceDisconnectAllClients()
                 }
                 else -> {
                     Log.w(TAG, "Unknown action: ${intent?.action}")
@@ -328,6 +333,36 @@ class VncServerService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+    
+    private fun forceDisconnectAllClients() {
+        try {
+            Log.d(TAG, "Force disconnecting all VNC clients")
+            
+            // Send disconnect signal to all connected clients
+            vncServer?.let { server ->
+                // Send disconnection notice to clients
+                handler.post {
+                    Toast.makeText(this, "🔌 Disconnecting all mirror clients...", Toast.LENGTH_SHORT).show()
+                }
+                
+                // Force stop current server to disconnect clients
+                server.stop()
+                
+                // Small delay before cleanup
+                Thread.sleep(500)
+                
+                handler.post {
+                    Toast.makeText(this, "✅ All clients disconnected", Toast.LENGTH_SHORT).show()
+                }
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error force disconnecting clients: ${e.message}", e)
+            handler.post {
+                Toast.makeText(this, "Failed to disconnect clients", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     override fun onDestroy() {
         try {

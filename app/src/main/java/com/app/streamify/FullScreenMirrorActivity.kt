@@ -1,5 +1,6 @@
 package com.app.streamify
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
@@ -26,11 +27,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class FullScreenMirrorActivity : ComponentActivity() {
+    companion object {
+        private const val TAG = "FullScreenMirror"
+    }
+    
     private var vncClient: VncClient? = null
     private var isConnected by mutableStateOf(false)
     private var isReconnecting by mutableStateOf(false)
     private var connectionAttempts by mutableIntStateOf(0)
-    private val maxReconnectAttempts = 5
+    private val maxReconnectAttempts = Int.MAX_VALUE // Unlimited reconnect attempts in full screen
     private var currentFrame by mutableStateOf<Bitmap?>(null)
     
     // Auto reconnect configuration
@@ -38,6 +43,8 @@ class FullScreenMirrorActivity : ComponentActivity() {
     private var lastConnectionIp = ""
     private var lastConnectionPort = 0
     private var reconnectDelayMs = 3000L // 3 seconds between attempts
+    private var reconnectStartTime = 0L // Track when reconnecting started
+    private val maxReconnectTimeMs = 60000L // 60 seconds total reconnect time
     
     private lateinit var vncConfig: VncConfig
 
@@ -141,13 +148,22 @@ class FullScreenMirrorActivity : ComponentActivity() {
         
         isReconnecting = true
         isConnected = false
+        reconnectStartTime = System.currentTimeMillis()
         
         lifecycleScope.launch {
-            // Try to reconnect with exponential backoff
-            while (isReconnecting && connectionAttempts < maxReconnectAttempts && autoReconnectEnabled) {
+            // Try to reconnect with time-based timeout
+            while (isReconnecting && autoReconnectEnabled) {
                 connectionAttempts++
                 
-                Log.d("FullScreenMirror", "Reconnect attempt $connectionAttempts/$maxReconnectAttempts")
+                // Check if we've exceeded max reconnect time
+                val elapsedTime = System.currentTimeMillis() - reconnectStartTime
+                if (elapsedTime > maxReconnectTimeMs) {
+                    Log.w("FullScreenMirror", "Reconnect timeout after ${elapsedTime}ms, returning to main")
+                    returnToMainActivity()
+                    break
+                }
+                
+                Log.d("FullScreenMirror", "Reconnect attempt $connectionAttempts (${elapsedTime}ms elapsed)")
                 
                 try {
                     withContext(Dispatchers.IO) {
@@ -196,13 +212,10 @@ class FullScreenMirrorActivity : ComponentActivity() {
                 if (!isReconnecting || !autoReconnectEnabled) break
             }
             
-            // If we reach here, all reconnect attempts failed
-            if (connectionAttempts >= maxReconnectAttempts) {
-                withContext(Dispatchers.Main) {
-                    isReconnecting = false
-                    // In full screen mode, we could close the activity or show error
-                    finish()
-                }
+            // If we reach here without successful connection, return to main
+            if (isReconnecting) {
+                Log.w("FullScreenMirror", "Reconnect failed, returning to main activity")
+                returnToMainActivity()
             }
         }
     }
@@ -237,10 +250,47 @@ class FullScreenMirrorActivity : ComponentActivity() {
             }
         }
     }
+    
+    private fun returnToMainActivity() {
+        isReconnecting = false
+        autoReconnectEnabled = false
+        
+        // Disconnect VNC client
+        vncClient?.disconnect()
+        
+        // Return to MainActivity with a flag indicating reconnect failure
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+            putExtra("reconnect_failed", true)
+            putExtra("failed_ip", lastConnectionIp)
+            putExtra("failed_port", lastConnectionPort)
+        }
+        startActivity(intent)
+        finish()
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        // If not connected and not currently reconnecting, try to reconnect
+        // This handles cases where HP A restarts and we need to reconnect
+        if (!isConnected && !isReconnecting && lastConnectionIp.isNotEmpty()) {
+            Log.d(TAG, "onResume: Attempting to reconnect to server")
+            // Reset connection attempts to give fresh chances
+            connectionAttempts = 0
+            triggerAutoReconnect()
+        }
+    }
 
     override fun onDestroy() {
         super.onDestroy()
-        vncClient?.disconnect()
+        // Don't disconnect on destroy - let server control the disconnection
+        // vncClient?.disconnect()
+    }
+    
+    override fun onBackPressed() {
+        // Disable back button - only server can control disconnect
+        // Full screen should stay active until server disconnects
+        Log.d(TAG, "Back button disabled - use server to disconnect")
     }
 }
 

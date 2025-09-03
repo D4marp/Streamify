@@ -43,6 +43,9 @@ import androidx.compose.ui.res.colorResource
 import androidx.compose.foundation.isSystemInDarkTheme
 import java.net.NetworkInterface
 import java.net.InetAddress
+import kotlinx.coroutines.delay
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -136,6 +139,22 @@ class MainActivity : ComponentActivity() {
 
         Log.d(TAG, "MainActivity onCreate started")
 
+        // Check if we returned from failed reconnect
+        val reconnectFailed = intent.getBooleanExtra("reconnect_failed", false)
+        if (reconnectFailed) {
+            val failedIp = intent.getStringExtra("failed_ip") ?: ""
+            val failedPort = intent.getIntExtra("failed_port", 0)
+            // Show reconnect failure message
+            lifecycleScope.launch {
+                delay(500) // Small delay to ensure UI is ready
+                Toast.makeText(
+                    this@MainActivity, 
+                    "Auto reconnect failed for $failedIp:$failedPort\nReturned to main menu", 
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+
         // Initialize VNC configuration
         vncConfig = VncConfig(this)
         Log.d(TAG, "VNC config initialized on port: ${vncConfig.serverPort}")
@@ -196,7 +215,8 @@ class MainActivity : ComponentActivity() {
                             requestAccessibilityServicePermission()
                         }
                     },
-                    onStopServer = { stopVncServer() }
+                    onStopServer = { stopVncServer() },
+                    onForceDisconnectClients = { forceDisconnectAllClients() }
                 )
             }
         }
@@ -270,6 +290,22 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping VNC server: ${e.message}", e)
             Toast.makeText(this, "Failed to stop VNC server", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun forceDisconnectAllClients() {
+        try {
+            val serviceIntent = Intent(this, VncServerService::class.java).apply {
+                action = VncServerService.ACTION_FORCE_DISCONNECT_CLIENTS
+            }
+            startService(serviceIntent)
+            
+            Toast.makeText(this, "🔌 Disconnecting all mirror clients...", Toast.LENGTH_SHORT).show()
+            Log.d(TAG, "Force disconnect clients requested")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error force disconnecting clients: ${e.message}", e)
+            Toast.makeText(this, "Failed to disconnect clients", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -525,7 +561,8 @@ fun StreamifyApp(
     onFullScreenMirrorClick: (String, Int) -> Unit,
     onRequestPermission: () -> Unit,
     onStartServer: () -> Unit,
-    onStopServer: () -> Unit
+    onStopServer: () -> Unit,
+    onForceDisconnectClients: () -> Unit
 ) {
     val context = LocalContext.current
     var ipAddress by remember { mutableStateOf("") }
@@ -673,6 +710,26 @@ fun StreamifyApp(
                         ) {
                             Text(
                                 text = "Stop VNC\nServer",
+                                color = colorResource(id = R.color.light),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    // Force Disconnect All Clients Button
+                    if (isVncRunning) {
+                        Button(
+                            onClick = onForceDisconnectClients,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary
+                            )
+                        ) {
+                            Text(
+                                text = "🔌 Force Disconnect All Mirror Clients",
                                 color = colorResource(id = R.color.light),
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium

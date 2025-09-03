@@ -1,5 +1,6 @@
 package com.app.streamify
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
@@ -33,7 +34,7 @@ class ClientActivity : ComponentActivity() {
     private var isConnected by mutableStateOf(false)
     private var isReconnecting by mutableStateOf(false)
     private var connectionAttempts by mutableIntStateOf(0)
-    private val maxReconnectAttempts = 5
+    private val maxReconnectAttempts = 50 // Increased attempts for better reliability
     private var currentFrame by mutableStateOf<Bitmap?>(null)
     
     // Auto reconnect configuration
@@ -217,9 +218,27 @@ class ClientActivity : ComponentActivity() {
         if (connectionAttempts >= maxReconnectAttempts) {
             withContext(Dispatchers.Main) {
                 isReconnecting = false
-                Toast.makeText(this@ClientActivity, "Auto reconnect failed after $maxReconnectAttempts attempts", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@ClientActivity, "Reconnect failed after $maxReconnectAttempts attempts", Toast.LENGTH_LONG).show()
+                
+                // Return to MainActivity after failed reconnect
+                returnToMainActivity()
             }
         }
+    }
+    
+    private fun returnToMainActivity() {
+        // Disconnect VNC client
+        vncClient?.disconnect()
+        
+        // Return to MainActivity with reconnect failure info
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+            putExtra("reconnect_failed", true)
+            putExtra("failed_ip", lastConnectionIp)
+            putExtra("failed_port", lastConnectionPort)
+        }
+        startActivity(intent)
+        finish()
     }
 
     private fun startFrameUpdates() {
@@ -525,12 +544,12 @@ fun ClientScreen(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            text = "🎮 Remote Control Active",
+                            text = "🖥️ Mirror View Only",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "• Tap to click • Drag to move cursor",
+                            text = "• View only mode • No touch control available",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
